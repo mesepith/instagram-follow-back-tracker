@@ -1,3 +1,20 @@
+async function waitForElement(selector) {
+    return new Promise(resolve => {
+        let element = document.querySelector(selector);
+        if (element) return resolve(element);
+
+        const observer = new MutationObserver(() => {
+            let element = document.querySelector(selector);
+            if (element) {
+                observer.disconnect();
+                resolve(element);
+            }
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+    });
+}
+
 async function getUserList(type) {
     return new Promise((resolve, reject) => {
         let userList = [];
@@ -28,8 +45,18 @@ async function getUserList(type) {
 
 async function fetchFollowData() {
     try {
-        let followingBtn = document.querySelector('a[href$="/following/"]');
-        let followersBtn = document.querySelector('a[href$="/followers/"]');
+        const currentURL = window.location.href;
+        const usernameMatch = currentURL.match(/instagram\.com\/([^\/]+)\/?/);
+
+        if (!usernameMatch) {
+            alert("Please go to your Instagram profile page.");
+            return;
+        }
+
+        const username = usernameMatch[1];
+
+        let followingBtn = await waitForElement(`a[href="/${username}/following/"]`);
+        let followersBtn = await waitForElement(`a[href="/${username}/followers/"]`);
 
         if (!followingBtn || !followersBtn) {
             alert("Please go to your Instagram profile page.");
@@ -38,7 +65,7 @@ async function fetchFollowData() {
 
         followingBtn.click();
         let following = await getUserList("Following");
-        
+
         followersBtn.click();
         let followers = await getUserList("Followers");
 
