@@ -121,54 +121,24 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
         return;
     }
 
-    // Find the scrollable container using multiple methods
+    // Find the scrollable container
     let scrollableContainer = null;
-
-    // Method 1: Try to find by class pattern (Instagram often uses class names starting with '_a')
-    const possibleContainers = dialog.querySelectorAll('div[class^="_a"]');
-    for (const container of possibleContainers) {
-        const style = window.getComputedStyle(container);
-        if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
-            scrollableContainer = container;
+    const allDivs = dialog.querySelectorAll('div');
+    for (const div of allDivs) {
+        if (div.scrollHeight > div.clientHeight && 
+            window.getComputedStyle(div).overflowY !== 'hidden') {
+            scrollableContainer = div;
             break;
         }
     }
 
-    // Method 2: If not found, look for any div with overflow-y scroll/auto
     if (!scrollableContainer) {
-        const allDivs = dialog.querySelectorAll('div');
-        for (const div of allDivs) {
-            const style = window.getComputedStyle(div);
-            if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && 
-                div.clientHeight > 100) {  // Must be reasonably tall
-                scrollableContainer = div;
-                break;
-            }
-        }
-    }
-
-    // Method 3: Try to find by structure (usually the modal has a specific hierarchy)
-    if (!scrollableContainer) {
-        const modalChildren = dialog.children;
-        if (modalChildren.length > 0) {
-            const firstChild = modalChildren[0];
-            const potentialContainer = firstChild.querySelector('div > div > div');
-            if (potentialContainer) {
-                scrollableContainer = potentialContainer;
-            }
-        }
-    }
-
-    if (!scrollableContainer) {
-        alert("Could not find scrollable container. Please try again.");
+        alert("Scrollable container not found. Please try again.");
         return;
     }
 
     const users = new Set();
     const userObjects = new Map();
-    let previousHeight = 0;
-    let noChangeCount = 0;
-    const maxNoChangeCount = 5;
 
     // Progress overlay
     const progressOverlay = document.createElement('div');
@@ -183,29 +153,14 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
     document.body.appendChild(progressOverlay);
 
     async function extractUsers() {
-        // Try multiple selectors for user items
-        const userSelectors = [
-            'div[role="button"]',
-            'div[class*="user"]',
-            'a[href^="/"]',
-            'div._ab8w._ab94._ab97._ab9f._ab9k._ab9p._abcm'  // Common Instagram class for user items
-        ];
-
-        let userItems = [];
-        for (const selector of userSelectors) {
-            userItems = scrollableContainer.querySelectorAll(selector);
-            if (userItems.length > 0) break;
-        }
-
+        const userItems = scrollableContainer.querySelectorAll('div[role="button"]');
         userItems.forEach(item => {
             try {
-                // Try multiple methods to get username
+                const spans = item.querySelectorAll('span');
                 let username = null;
                 let fullName = '';
-                let profileImage = '';
 
-                // Method 1: From span
-                const spans = item.querySelectorAll('span');
+                // Find username (usually the first non-empty span without spaces)
                 for (const span of spans) {
                     const text = span.textContent?.trim();
                     if (text && !text.includes(' ') && text.length > 0) {
@@ -214,26 +169,21 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
                     }
                 }
 
-                // Method 2: From href
-                if (!username) {
-                    const link = item.querySelector('a[href^="/"]');
-                    if (link) {
-                        const href = link.getAttribute('href');
-                        username = href.split('/')[1];
+                // Find full name (usually the second text-containing span)
+                let foundUsername = false;
+                for (const span of spans) {
+                    const text = span.textContent?.trim();
+                    if (text && text === username) {
+                        foundUsername = true;
+                    } else if (foundUsername && text) {
+                        fullName = text;
+                        break;
                     }
-                }
-
-                // Get full name
-                const nameElement = item.querySelectorAll('span')[1];
-                if (nameElement) {
-                    fullName = nameElement.textContent?.trim() || '';
                 }
 
                 // Get profile image
                 const img = item.querySelector('img');
-                if (img) {
-                    profileImage = img.src;
-                }
+                const profileImage = img ? img.src : '';
 
                 if (username && !users.has(username)) {
                     users.add(username);
@@ -250,38 +200,50 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
         progressOverlay.textContent = `Loading ${type}... (${users.size} found)`;
     }
 
-    // Initial extraction
-    await extractUsers();
+    let lastScrollHeight = 0;
+    let unchangedCount = 0;
+    const maxUnchangedCount = 5;
 
-    // Continuous scrolling
-    while (noChangeCount < maxNoChangeCount) {
-        const currentHeight = scrollableContainer.scrollHeight;
+    async function autoScroll() {
+        while (unchangedCount < maxUnchangedCount) {
+            // Extract current users
+            await extractUsers();
 
-        // Scroll in smaller increments
-        const scrollStep = Math.min(500, currentHeight / 4);
-        for (let i = 0; i < 4; i++) {
-            scrollableContainer.scrollTop += scrollStep;
-            await new Promise(resolve => setTimeout(resolve, 500));
+            // Get current scroll position and height
+            const currentScrollHeight = scrollableContainer.scrollHeight;
+
+            // If scroll height hasn't changed
+            if (currentScrollHeight === lastScrollHeight) {
+                unchangedCount++;
+            } else {
+                unchangedCount = 0;
+                lastScrollHeight = currentScrollHeight;
+            }
+
+            // Scroll down
+            const scrollAmount = Math.min(500, scrollableContainer.scrollHeight - scrollableContainer.scrollTop);
+            scrollableContainer.scrollTop += scrollAmount;
+
+            // Add random delay between scrolls
+            await new Promise(resolve => setTimeout(resolve, Math.random() * 800 + 500));
+
+            // Check if we've reached the bottom
+            if (scrollableContainer.scrollTop + scrollableContainer.clientHeight >= scrollableContainer.scrollHeight) {
+                // Try one more scroll to be sure
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                await extractUsers();
+                if (scrollableContainer.scrollTop + scrollableContainer.clientHeight >= scrollableContainer.scrollHeight) {
+                    break;
+                }
+            }
         }
+    }
 
-        // Wait for content to load
-        await new Promise(resolve => setTimeout(resolve, 1500));
-
-        // Extract new users
-        await extractUsers();
-
-        // Check if we've reached the bottom
-        if (currentHeight === previousHeight) {
-            noChangeCount++;
-        } else {
-            noChangeCount = 0;
-            previousHeight = currentHeight;
-        }
-
-        // Random delay
-        await new Promise(resolve => 
-            setTimeout(resolve, Math.random() * 500 + 1000)
-        );
+    // Start auto-scrolling
+    try {
+        await autoScroll();
+    } catch (error) {
+        console.error("Error during auto-scroll:", error);
     }
 
     // Remove progress overlay
@@ -294,6 +256,89 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
     displayResults(userArray, type);
 }
 
+// Add this helper function to ensure the modal is fully loaded
+async function waitForModalToLoad() {
+    return new Promise((resolve) => {
+        let attempts = 0;
+        const maxAttempts = 20;
+        const checkModal = setInterval(() => {
+            const dialog = document.querySelector('div[role="dialog"]');
+            if (dialog) {
+                clearInterval(checkModal);
+                resolve(true);
+            }
+            attempts++;
+            if (attempts >= maxAttempts) {
+                clearInterval(checkModal);
+                resolve(false);
+            }
+        }, 500);
+    });
+}
+
+// Update the open and scrape functions
+async function openAndScrapeFollowers() {
+    const followersLinks = document.querySelectorAll('a');
+    let followersLink = null;
+    for (const link of followersLinks) {
+        if (link.textContent && link.textContent.includes('follower')) {
+            followersLink = link;
+            break;
+        }
+    }
+
+    if (!followersLink) {
+        alert("Followers link not found. Make sure you're on an Instagram profile page.");
+        return;
+    }
+
+    followersLink.click();
+
+    // Wait for modal to load
+    const modalLoaded = await waitForModalToLoad();
+    if (!modalLoaded) {
+        alert("Modal failed to load");
+        return;
+    }
+
+    // Wait additional time for content to load
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // Start scraping
+    await scrapeAllUsers("Followers");
+}
+
+// Similar update for openAndScrapeFollowing
+async function openAndScrapeFollowing() {
+    const followingLinks = document.querySelectorAll('a');
+    let followingLink = null;
+    for (const link of followingLinks) {
+        if (link.textContent && link.textContent.includes('following')) {
+            followingLink = link;
+            break;
+        }
+    }
+
+    if (!followingLink) {
+        alert("Following link not found. Make sure you're on an Instagram profile page.");
+        return;
+    }
+
+    followingLink.click();
+
+    // Wait for modal to load
+    const modalLoaded = await waitForModalToLoad();
+    if (!modalLoaded) {
+        alert("Modal failed to load");
+        return;
+    }
+
+    // Wait additional time for content to load
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // Start scraping
+    await scrapeAllUsers("Following");
+}
 
 // Add this helper function to automate scrolling
 function autoScroll(element) {
