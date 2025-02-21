@@ -1,15 +1,33 @@
+<!-- popup.html -->
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Instagram Follow Checker</title>
-    <link rel="stylesheet" href="styles.css">
+  <title>Instagram Followers Viewer</title>
+  <style>
+    body {
+      width: 200px;
+      padding: 10px;
+      font-family: Arial, sans-serif;
+    }
+    button {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 8px;
+      background-color: #0095f6;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #0077e5;
+    }
+  </style>
 </head>
 <body>
-    <h1>Check Unfollowers</h1>
-    <button id="checkBtn">Check</button>
-    <ul id="resultList"></ul>
-    <script src="popup.js"></script>
+  <h3>Instagram Followers Viewer</h3>
+  <button id="checkFollowers">Check Followers</button>
+  <button id="checkFollowing">Check Following</button>
+  <script src="popup.js"></script>
 </body>
 </html>
