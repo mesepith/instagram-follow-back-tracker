@@ -1,5 +1,5 @@
-async function waitForElement(selector) {
-    return new Promise(resolve => {
+async function waitForElement(selector, timeout = 5000) {
+    return new Promise((resolve, reject) => {
         let element = document.querySelector(selector);
         if (element) return resolve(element);
 
@@ -12,6 +12,11 @@ async function waitForElement(selector) {
         });
 
         observer.observe(document.body, { childList: true, subtree: true });
+
+        setTimeout(() => {
+            observer.disconnect();
+            reject(`Timeout: Element ${selector} not found`);
+        }, timeout);
     });
 }
 
@@ -45,38 +50,53 @@ async function getUserList(type) {
 
 async function fetchFollowData() {
     try {
-        const currentURL = window.location.href;
-        const usernameMatch = currentURL.match(/instagram\.com\/([^\/]+)\/?/);
+        console.log("Fetching follow data...");
 
-        if (!usernameMatch) {
+        // Get the current URL
+        const currentURL = window.location.href;
+
+        // Check if we are on a user profile
+        const usernameMatch = currentURL.match(/instagram\.com\/([^\/?]+)\/?/);
+        if (!usernameMatch || usernameMatch[1] === "accounts" || usernameMatch[1] === "direct") {
             alert("Please go to your Instagram profile page.");
             return;
         }
 
         const username = usernameMatch[1];
+        console.log(`Detected username: ${username}`);
 
+        // Wait for "Following" and "Followers" buttons to appear
         let followingBtn = await waitForElement(`a[href="/${username}/following/"]`);
         let followersBtn = await waitForElement(`a[href="/${username}/followers/"]`);
 
         if (!followingBtn || !followersBtn) {
-            alert("Please go to your Instagram profile page.");
+            alert("Couldn't find the follow lists. Ensure you're logged in and on your profile.");
             return;
         }
 
+        // Click "Following" and scrape the list
         followingBtn.click();
+        console.log("Opening Following list...");
         let following = await getUserList("Following");
 
+        // Click "Followers" and scrape the list
         followersBtn.click();
+        console.log("Opening Followers list...");
         let followers = await getUserList("Followers");
 
+        // Find users not following back
         let notFollowingBack = following.filter(user => !followers.includes(user));
+        console.log("Users not following back:", notFollowingBack);
 
+        // Store in Chrome local storage for popup.js to read
         chrome.storage.local.set({ "notFollowingBack": notFollowingBack });
+
         alert(`Found ${notFollowingBack.length} users not following you back!`);
     } catch (error) {
-        console.error(error);
+        console.error("Error:", error);
         alert("Error fetching data. Try again.");
     }
 }
 
+// Ensure this runs when script executes
 fetchFollowData();
