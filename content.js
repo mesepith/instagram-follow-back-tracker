@@ -21,14 +21,18 @@ async function waitForElement(selector, timeout = 5000) {
 }
 
 async function getUserList(type) {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
         let userList = [];
-        let dialog = document.querySelector(`[aria-label="${type}"]`);
-
+        
+        console.log(`Waiting for ${type} dialog...`);
+        let dialog = await waitForElement(`[role="dialog"]`, 10000).catch(() => null);
+        
         if (!dialog) {
             reject(`Could not find ${type} dialog`);
             return;
         }
+
+        console.log(`${type} dialog found, extracting users...`);
 
         let interval = setInterval(() => {
             let users = dialog.querySelectorAll("a[role='link'] span");
@@ -52,10 +56,8 @@ async function fetchFollowData() {
     try {
         console.log("Fetching follow data...");
 
-        // Get the current URL
+        // Get the current URL and extract username
         const currentURL = window.location.href;
-
-        // Check if we are on a user profile
         const usernameMatch = currentURL.match(/instagram\.com\/([^\/?]+)\/?/);
         if (!usernameMatch || usernameMatch[1] === "accounts" || usernameMatch[1] === "direct") {
             alert("Please go to your Instagram profile page.");
@@ -65,7 +67,7 @@ async function fetchFollowData() {
         const username = usernameMatch[1];
         console.log(`Detected username: ${username}`);
 
-        // Wait for "Following" and "Followers" buttons to appear
+        // Wait for the "Following" button
         let followingBtn = await waitForElement(`a[href="/${username}/following/"]`);
         let followersBtn = await waitForElement(`a[href="/${username}/followers/"]`);
 
@@ -74,16 +76,19 @@ async function fetchFollowData() {
             return;
         }
 
-        // Click "Following" and scrape the list
+        // Click "Following" and wait for modal
         followingBtn.click();
         console.log("Opening Following list...");
+        await waitForElement(`[role="dialog"]`); // Wait for modal to appear
         let following = await getUserList("Following");
+        console.log('following:', following);
 
-        // Click "Followers" and scrape the list
+        // Click "Followers" and wait for modal
         followersBtn.click();
         console.log("Opening Followers list...");
+        await waitForElement(`[role="dialog"]`); // Wait for modal to appear
         let followers = await getUserList("Followers");
-
+        console.log('followers:', followers);
         // Find users not following back
         let notFollowingBack = following.filter(user => !followers.includes(user));
         console.log("Users not following back:", notFollowingBack);
