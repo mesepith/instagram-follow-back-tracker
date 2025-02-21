@@ -1,4 +1,4 @@
-async function waitForElement(selector, timeout = 5000) {
+async function waitForElement(selector, timeout = 10000) {
     return new Promise((resolve, reject) => {
         let element = document.querySelector(selector);
         if (element) return resolve(element);
@@ -34,8 +34,12 @@ async function getUserList(type) {
 
         console.log(`${type} dialog found, extracting users...`);
 
-        let interval = setInterval(() => {
-            let users = dialog.querySelectorAll("a[role='link'] span");
+        let lastHeight = 0;
+        let scrollAttempts = 0;
+
+        while (scrollAttempts < 20) { 
+            let users = dialog.querySelectorAll('span a[role="link"]');  // 🔥 Corrected selector for usernames
+
             users.forEach(user => {
                 let username = user.innerText;
                 if (!userList.includes(username)) {
@@ -43,20 +47,30 @@ async function getUserList(type) {
                 }
             });
 
-            dialog.scrollBy(0, 500);
-            if (users.length === userList.length) {
-                clearInterval(interval);
-                resolve(userList);
+            dialog.scrollBy(0, 1000);
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for new users to load
+            
+            let newHeight = dialog.scrollHeight;
+            if (newHeight === lastHeight) {
+                scrollAttempts++;
+            } else {
+                scrollAttempts = 0; // Reset attempts if new content loads
             }
-        }, 1000);
+            lastHeight = newHeight;
+
+            if (users.length === userList.length) break; // Stop if no new users are found
+        }
+
+        console.log(`${type} users:`, userList);
+        resolve(userList);
     });
 }
+
 
 async function fetchFollowData() {
     try {
         console.log("Fetching follow data...");
 
-        // Get the current URL and extract username
         const currentURL = window.location.href;
         const usernameMatch = currentURL.match(/instagram\.com\/([^\/?]+)\/?/);
         if (!usernameMatch || usernameMatch[1] === "accounts" || usernameMatch[1] === "direct") {
@@ -67,7 +81,6 @@ async function fetchFollowData() {
         const username = usernameMatch[1];
         console.log(`Detected username: ${username}`);
 
-        // Wait for the "Following" button
         let followingBtn = await waitForElement(`a[href="/${username}/following/"]`);
         let followersBtn = await waitForElement(`a[href="/${username}/followers/"]`);
 
@@ -79,16 +92,15 @@ async function fetchFollowData() {
         // Click "Following" and wait for modal
         followingBtn.click();
         console.log("Opening Following list...");
-        await waitForElement(`[role="dialog"]`); // Wait for modal to appear
+        await waitForElement(`[role="dialog"]`);
         let following = await getUserList("Following");
-        console.log('following:', following);
 
         // Click "Followers" and wait for modal
         followersBtn.click();
         console.log("Opening Followers list...");
-        await waitForElement(`[role="dialog"]`); // Wait for modal to appear
+        await waitForElement(`[role="dialog"]`);
         let followers = await getUserList("Followers");
-        console.log('followers:', followers);
+
         // Find users not following back
         let notFollowingBack = following.filter(user => !followers.includes(user));
         console.log("Users not following back:", notFollowingBack);
