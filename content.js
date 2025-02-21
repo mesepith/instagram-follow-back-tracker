@@ -137,8 +137,24 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
         return;
     }
 
+    // Debug the container
+    console.log('Found scrollable container:', scrollableContainer);
+    console.log('Container dimensions:', {
+        scrollHeight: scrollableContainer.scrollHeight,
+        clientHeight: scrollableContainer.clientHeight,
+        children: scrollableContainer.children.length
+    });
+
+    // Test if we can find any user elements
+    const testItems = scrollableContainer.querySelectorAll('a, div[role="button"]');
+    console.log('Initial test for user elements:', testItems.length);
+
+    // Clear any existing data
     const users = new Set();
     const userObjects = new Map();
+
+    // Debug log
+    console.log("Starting to scrape users for:", type);
 
     // Progress overlay
     const progressOverlay = document.createElement('div');
@@ -153,98 +169,144 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
     document.body.appendChild(progressOverlay);
 
     async function extractUsers() {
-        const userItems = scrollableContainer.querySelectorAll('div[role="button"]');
+        // Try different selectors for user items
+        const selectors = [
+            'div[role="dialog"] div[style*="height"] a', // Modern Instagram structure
+            'div[role="dialog"] div[role="button"]',     // Alternative structure
+            'div[role="dialog"] a[role="link"]'          // Another common structure
+        ];
+    
+        let userItems = [];
+        for (const selector of selectors) {
+            userItems = scrollableContainer.querySelectorAll(selector);
+            if (userItems.length > 0) {
+                console.log(`Found users using selector: ${selector}`);
+                break;
+            }
+        }
+    
+        let usersFound = false;
+    
         userItems.forEach(item => {
             try {
-                const spans = item.querySelectorAll('span');
-                let username = null;
+                let username = '';
                 let fullName = '';
-
-                // Find username (usually the first non-empty span without spaces)
-                for (const span of spans) {
-                    const text = span.textContent?.trim();
-                    if (text && !text.includes(' ') && text.length > 0) {
-                        username = text;
-                        break;
+                let profileImage = '';
+    
+                // Method 1: Try getting username from href
+                if (item.href) {
+                    username = item.href.split('/').filter(Boolean).pop();
+                }
+    
+                // Method 2: Try getting username from spans
+                if (!username) {
+                    const spans = Array.from(item.querySelectorAll('span')).filter(span => 
+                        span.textContent && span.textContent.trim()
+                    );
+    
+                    if (spans.length > 0) {
+                        username = spans[0].textContent.trim();
+                        if (spans.length > 1) {
+                            fullName = spans[1].textContent.trim();
+                        }
                     }
                 }
-
-                // Find full name (usually the second text-containing span)
-                let foundUsername = false;
-                for (const span of spans) {
-                    const text = span.textContent?.trim();
-                    if (text && text === username) {
-                        foundUsername = true;
-                    } else if (foundUsername && text) {
-                        fullName = text;
-                        break;
+    
+                // Method 3: Try getting username from div text
+                if (!username) {
+                    const divs = item.querySelectorAll('div');
+                    for (const div of divs) {
+                        if (div.textContent && div.textContent.trim() && !div.textContent.includes(' ')) {
+                            username = div.textContent.trim();
+                            break;
+                        }
                     }
                 }
-
+    
                 // Get profile image
                 const img = item.querySelector('img');
-                const profileImage = img ? img.src : '';
-
+                if (img) {
+                    profileImage = img.src;
+                }
+    
+                // Debug the extraction
+                console.log('Extracted data:', { username, fullName, profileImage });
+    
                 if (username && !users.has(username)) {
-                    users.add(username);
-                    userObjects.set(username, {
-                        username,
-                        fullName,
-                        profileImage
-                    });
+                    // Remove any @ symbol if present
+                    username = username.replace('@', '');
+    
+                    // Only add if it looks like a valid username
+                    if (username.length > 0 && !username.includes(' ')) {
+                        users.add(username);
+                        userObjects.set(username, {
+                            username,
+                            fullName,
+                            profileImage
+                        });
+                        usersFound = true;
+                        console.log("Added user:", { username, fullName, profileImage });
+                    }
                 }
             } catch (e) {
                 console.error("Error extracting user:", e);
             }
         });
+    
         progressOverlay.textContent = `Loading ${type}... (${users.size} found)`;
+    
+        // Debug output
+        console.log(`Current extraction found ${userItems.length} items, total unique users: ${users.size}`);
+    
+        return usersFound;
     }
+    
 
-    let lastScrollHeight = 0;
-    let unchangedCount = 0;
-    const maxUnchangedCount = 5;
+    let previousHeight = 0;
+    let noChangeCount = 0;
+    const maxNoChangeCount = 5;
 
-    async function autoScroll() {
-        while (unchangedCount < maxUnchangedCount) {
-            // Extract current users
-            await extractUsers();
-
-            // Get current scroll position and height
-            const currentScrollHeight = scrollableContainer.scrollHeight;
-
-            // If scroll height hasn't changed
-            if (currentScrollHeight === lastScrollHeight) {
-                unchangedCount++;
-            } else {
-                unchangedCount = 0;
-                lastScrollHeight = currentScrollHeight;
-            }
-
-            // Scroll down
-            const scrollAmount = Math.min(500, scrollableContainer.scrollHeight - scrollableContainer.scrollTop);
-            scrollableContainer.scrollTop += scrollAmount;
-
-            // Add random delay between scrolls
-            await new Promise(resolve => setTimeout(resolve, Math.random() * 800 + 500));
-
-            // Check if we've reached the bottom
-            if (scrollableContainer.scrollTop + scrollableContainer.clientHeight >= scrollableContainer.scrollHeight) {
-                // Try one more scroll to be sure
-                await new Promise(resolve => setTimeout(resolve, 1500));
+    while (noChangeCount < maxNoChangeCount) {
+        const currentHeight = scrollableContainer.scrollHeight;
+    
+        // Extract users
+        const foundUsers = await extractUsers();
+        console.log(`Scroll iteration - Found users: ${foundUsers}, Total users: ${users.size}`);
+    
+        // Scroll down in smaller increments
+        const scrollStep = Math.min(300, scrollableContainer.scrollHeight / 4);
+        scrollableContainer.scrollTop += scrollStep;
+    
+        // Wait for content to load
+        await new Promise(resolve => setTimeout(resolve, 1500));
+    
+        if (currentHeight === scrollableContainer.scrollHeight) {
+            noChangeCount++;
+            console.log(`No height change detected. Attempt ${noChangeCount} of ${maxNoChangeCount}`);
+    
+            if (noChangeCount === maxNoChangeCount - 1) {
+                // Final attempt: scroll to very bottom
+                scrollableContainer.scrollTop = scrollableContainer.scrollHeight;
+                await new Promise(resolve => setTimeout(resolve, 2000));
                 await extractUsers();
-                if (scrollableContainer.scrollTop + scrollableContainer.clientHeight >= scrollableContainer.scrollHeight) {
-                    break;
-                }
             }
+        } else {
+            noChangeCount = 0;
+            previousHeight = currentHeight;
         }
+    
+        // Add random delay
+        await new Promise(resolve => 
+            setTimeout(resolve, Math.random() * 800 + 700)
+        );
     }
+    
 
-    // Start auto-scrolling
-    try {
-        await autoScroll();
-    } catch (error) {
-        console.error("Error during auto-scroll:", error);
-    }
+    // Final extraction to make sure we got everyone
+    await extractUsers();
+
+    // Debug log
+    console.log("Finished scraping. Total users found:", users.size);
 
     // Remove progress overlay
     document.body.removeChild(progressOverlay);
@@ -255,6 +317,7 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
     // Display results
     displayResults(userArray, type);
 }
+
 
 // Add this helper function to ensure the modal is fully loaded
 async function waitForModalToLoad() {
@@ -364,9 +427,11 @@ function autoScroll(element) {
     // Close the modal if it exists
     const closeButton = document.querySelector('div[role="dialog"] button');
     if (closeButton) {
-      closeButton.click();
+        closeButton.click();
     }
-    
+
+    console.log("Displaying results for users:", users); // Debug log
+
     // Create a container for our results
     const container = document.createElement('div');
     container.style.position = 'fixed';
@@ -380,7 +445,7 @@ function autoScroll(element) {
     container.style.boxSizing = 'border-box';
     container.style.overflow = 'auto';
     container.style.fontFamily = 'Arial, sans-serif';
-    
+
     // Add a header
     const header = document.createElement('div');
     header.style.display = 'flex';
@@ -389,11 +454,12 @@ function autoScroll(element) {
     header.style.marginBottom = '20px';
     header.style.padding = '10px 0';
     header.style.borderBottom = '1px solid #dbdbdb';
-    
+
     const title = document.createElement('h2');
     title.textContent = `${type} (${users.length})`;
     title.style.margin = '0';
-    
+
+    // Add export button
     const exportBtn = document.createElement('button');
     exportBtn.textContent = 'Export to CSV';
     exportBtn.style.padding = '8px 16px';
@@ -402,213 +468,138 @@ function autoScroll(element) {
     exportBtn.style.border = 'none';
     exportBtn.style.borderRadius = '4px';
     exportBtn.style.cursor = 'pointer';
-    exportBtn.style.fontWeight = 'bold';
-    exportBtn.style.marginRight = '10px';
-    exportBtn.onclick = function() {
-      exportToCSV(users, `instagram_${type.toLowerCase()}_${new Date().toISOString().split('T')[0]}`);
+    exportBtn.onclick = () => {
+        exportToCSV(users, `instagram_${type.toLowerCase()}_${new Date().toISOString().split('T')[0]}`);
     };
-    
+
+    // Add close button
     const closeBtn = document.createElement('button');
     closeBtn.textContent = 'Close';
+    closeBtn.style.marginLeft = '10px';
     closeBtn.style.padding = '8px 16px';
-    closeBtn.style.backgroundColor = '#0095f6';
+    closeBtn.style.backgroundColor = '#dc3545';
     closeBtn.style.color = 'white';
     closeBtn.style.border = 'none';
     closeBtn.style.borderRadius = '4px';
     closeBtn.style.cursor = 'pointer';
-    closeBtn.style.fontWeight = 'bold';
-    closeBtn.onclick = function() {
-      document.body.removeChild(container);
+    closeBtn.onclick = () => {
+        document.body.removeChild(container);
     };
-    
-    const buttonContainer = document.createElement('div');
-    buttonContainer.appendChild(exportBtn);
-    buttonContainer.appendChild(closeBtn);
-    
+
     header.appendChild(title);
-    header.appendChild(buttonContainer);
+    header.appendChild(exportBtn);
+    header.appendChild(closeBtn);
     container.appendChild(header);
-    
-    // Add search and filter options
-    const controlsRow = document.createElement('div');
-    controlsRow.style.display = 'flex';
-    controlsRow.style.marginBottom = '20px';
-    controlsRow.style.gap = '10px';
-    
-    // Search input
+
+    // Add search input
     const searchInput = document.createElement('input');
     searchInput.type = 'text';
     searchInput.placeholder = 'Search users...';
-    searchInput.style.flex = '1';
-    searchInput.style.padding = '12px';
-    searchInput.style.boxSizing = 'border-box';
+    searchInput.style.width = '100%';
+    searchInput.style.padding = '10px';
+    searchInput.style.marginBottom = '20px';
     searchInput.style.border = '1px solid #dbdbdb';
     searchInput.style.borderRadius = '4px';
-    searchInput.style.fontSize = '14px';
-    
-    // Sort dropdown
-    const sortSelect = document.createElement('select');
-    sortSelect.style.padding = '12px';
-    sortSelect.style.border = '1px solid #dbdbdb';
-    sortSelect.style.borderRadius = '4px';
-    sortSelect.style.backgroundColor = 'white';
-    
-    const sortOptions = [
-      { value: 'username-asc', text: 'Username (A-Z)' },
-      { value: 'username-desc', text: 'Username (Z-A)' }
-    ];
-    
-    sortOptions.forEach(option => {
-      const optElement = document.createElement('option');
-      optElement.value = option.value;
-      optElement.textContent = option.text;
-      sortSelect.appendChild(optElement);
-    });
-    
-    controlsRow.appendChild(searchInput);
-    controlsRow.appendChild(sortSelect);
-    container.appendChild(controlsRow);
-    
-    // Function to filter and sort users
-    function updateUserList() {
-      const searchTerm = searchInput.value.toLowerCase();
-      const sortValue = sortSelect.value;
-      
-      // Filter users
-      const filteredUsers = users.filter(user => 
-        user.username.toLowerCase().includes(searchTerm) || 
-        (user.fullName && user.fullName.toLowerCase().includes(searchTerm))
-      );
-      
-      // Sort users
-      filteredUsers.sort((a, b) => {
-        if (sortValue === 'username-asc') {
-          return a.username.localeCompare(b.username);
-        } else if (sortValue === 'username-desc') {
-          return b.username.localeCompare(a.username);
-        }
-        return 0;
-      });
-      
-      // Update title with count
-      title.textContent = `${type} (${filteredUsers.length} of ${users.length})`;
-      
-      // Clear existing list
-      userList.innerHTML = '';
-      
-      // Show "No users found" message if empty
-      if (filteredUsers.length === 0) {
-        const noUsersMsg = document.createElement('div');
-        noUsersMsg.textContent = "No users found matching your search.";
-        noUsersMsg.style.padding = '20px';
-        noUsersMsg.style.textAlign = 'center';
-        noUsersMsg.style.color = '#8e8e8e';
-        userList.appendChild(noUsersMsg);
-      } else {
-        // Rebuild user list
-        filteredUsers.forEach(user => {
-          const userItem = document.createElement('div');
-          userItem.className = 'user-item';
-          userItem.style.padding = '10px';
-          userItem.style.border = '1px solid #dbdbdb';
-          userItem.style.borderRadius = '4px';
-          userItem.style.transition = 'background-color 0.2s ease';
-          userItem.style.backgroundColor = '#f9f9f9';
-          userItem.style.display = 'flex';
-          userItem.style.alignItems = 'center';
-          userItem.style.gap = '10px';
-          
-          userItem.onmouseover = function() {
-            this.style.backgroundColor = '#f0f0f0';
-          };
-          
-          userItem.onmouseout = function() {
-            this.style.backgroundColor = '#f9f9f9';
-          };
-          
-          // Add profile image if available
-          if (user.profileImage) {
-            const img = document.createElement('img');
-            img.src = user.profileImage;
-            img.style.width = '32px';
-            img.style.height = '32px';
-            img.style.borderRadius = '50%';
-            img.style.objectFit = 'cover';
-            userItem.appendChild(img);
-          }
-          
-          // Container for username and full name
-          const userInfo = document.createElement('div');
-          userInfo.style.flexGrow = '1';
-          
-          const link = document.createElement('a');
-          link.href = `https://instagram.com/${user.username}`;
-          link.textContent = user.username;
-          link.style.textDecoration = 'none';
-          link.style.color = '#0095f6';
-          link.style.fontWeight = '500';
-          link.style.display = 'block';
-          link.target = '_blank';
-          userInfo.appendChild(link);
-          
-          // Add full name if available
-          if (user.fullName) {
-            const nameSpan = document.createElement('span');
-            nameSpan.textContent = user.fullName;
-            nameSpan.style.color = '#8e8e8e';
-            nameSpan.style.fontSize = '14px';
-            userInfo.appendChild(nameSpan);
-          }
-          
-          userItem.appendChild(userInfo);
-          userList.appendChild(userItem);
-        });
-      }
-    }
-    
-    // Event listeners for filtering and sorting
-    searchInput.addEventListener('input', updateUserList);
-    sortSelect.addEventListener('change', updateUserList);
-    
+    container.appendChild(searchInput);
+
     // Create user list container
     const userList = document.createElement('div');
     userList.style.display = 'grid';
-    userList.style.gridTemplateColumns = 'repeat(auto-fill, minmax(280px, 1fr))';
+    userList.style.gridTemplateColumns = 'repeat(auto-fill, minmax(200px, 1fr))';
     userList.style.gap = '10px';
     container.appendChild(userList);
-    
-    // Function to export to CSV
-    function exportToCSV(data, filename) {
-      // Create CSV content
-      const csvContent = [
-        // CSV header
-        ['Username', 'Full Name', 'Profile URL'].join(','),
-        // CSV rows
-        ...data.map(user => [
-          `"${user.username}"`,
-          `"${user.fullName || ''}"`,
-          `"https://instagram.com/${user.username}"`
-        ].join(','))
-      ].join('\n');
-      
-      // Create download link
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.setAttribute('href', url);
-      link.setAttribute('download', `${filename}.csv`);
-      link.style.display = 'none';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+
+    // Function to render users
+    function renderUsers(filterText = '') {
+        userList.innerHTML = ''; // Clear current list
+        const filteredUsers = users.filter(user => 
+            user.username.toLowerCase().includes(filterText.toLowerCase()) ||
+            user.fullName.toLowerCase().includes(filterText.toLowerCase())
+        );
+
+        if (filteredUsers.length === 0) {
+            const noResults = document.createElement('div');
+            noResults.textContent = 'No users found';
+            noResults.style.textAlign = 'center';
+            noResults.style.gridColumn = '1 / -1';
+            noResults.style.padding = '20px';
+            userList.appendChild(noResults);
+            return;
+        }
+
+        filteredUsers.forEach(user => {
+            const userCard = document.createElement('div');
+            userCard.style.border = '1px solid #dbdbdb';
+            userCard.style.borderRadius = '4px';
+            userCard.style.padding = '10px';
+            userCard.style.display = 'flex';
+            userCard.style.alignItems = 'center';
+            userCard.style.gap = '10px';
+
+            if (user.profileImage) {
+                const img = document.createElement('img');
+                img.src = user.profileImage;
+                img.style.width = '40px';
+                img.style.height = '40px';
+                img.style.borderRadius = '50%';
+                img.style.objectFit = 'cover';
+                userCard.appendChild(img);
+            }
+
+            const userInfo = document.createElement('div');
+
+            const usernameLink = document.createElement('a');
+            usernameLink.href = `https://instagram.com/${user.username}`;
+            usernameLink.textContent = user.username;
+            usernameLink.target = '_blank';
+            usernameLink.style.textDecoration = 'none';
+            usernameLink.style.color = '#0095f6';
+            usernameLink.style.fontWeight = 'bold';
+            userInfo.appendChild(usernameLink);
+
+            if (user.fullName) {
+                const fullName = document.createElement('div');
+                fullName.textContent = user.fullName;
+                fullName.style.color = '#8e8e8e';
+                fullName.style.fontSize = '14px';
+                userInfo.appendChild(fullName);
+            }
+
+            userCard.appendChild(userInfo);
+            userList.appendChild(userCard);
+        });
+
+        // Update title count
+        title.textContent = `${type} (${filteredUsers.length} of ${users.length})`;
     }
-    
-    // Initial population of the list
-    updateUserList();
-    
+
+    // Add search functionality
+    searchInput.addEventListener('input', (e) => {
+        renderUsers(e.target.value);
+    });
+
+    // Initial render
+    renderUsers();
+
     // Add to document
     document.body.appendChild(container);
-    
-    // Focus on search input
-    searchInput.focus();
-  }
+}
+
+// Helper function to export to CSV
+function exportToCSV(users, filename) {
+    const csv = [
+        ['Username', 'Full Name', 'Profile URL'],
+        ...users.map(user => [
+            user.username,
+            user.fullName,
+            `https://instagram.com/${user.username}`
+        ])
+    ].map(row => row.join(',')).join('\n');
+
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.setAttribute('href', url);
+    a.setAttribute('download', `${filename}.csv`);
+    a.click();
+}
